@@ -124,7 +124,7 @@ func matchIPv4ByExactPrefix(bs *blockSearch, ch *columnHeader, bm *bitmap, prefi
 	if prefix == "" {
 		return
 	}
-	if prefix < "0" || prefix > "9" || len(tokens) > 3*bloomFilterHashesCount || !matchBloomFilterAllTokens(bs, ch, tokens) {
+	if prefix < "0" || prefix > "9" || len(tokens) > 3*bloomFilterTokenHashesCount || !matchBloomFilterAllTokens(bs, ch, tokens) {
 		bm.resetBits()
 		return
 	}
@@ -142,7 +142,7 @@ func matchFloat64ByExactPrefix(bs *blockSearch, ch *columnHeader, bm *bitmap, pr
 		// An empty prefix matches all the values
 		return
 	}
-	if len(tokens) > 2*bloomFilterHashesCount || !matchBloomFilterAllTokens(bs, ch, tokens) {
+	if len(tokens) > 2*bloomFilterTokenHashesCount || !matchBloomFilterAllTokens(bs, ch, tokens) {
 		bm.resetBits()
 		return
 	}
