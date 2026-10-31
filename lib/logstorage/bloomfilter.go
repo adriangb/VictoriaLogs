@@ -1,6 +1,7 @@
 package logstorage
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -37,7 +38,32 @@ func bloomFilterMarshalHashes(dst []byte, hashes []uint64) []byte {
 }
 
 type bloomFilter struct {
+	// bits contains bloom filter words in the marshaled byte order (big-endian), so marshal and unmarshal are plain copies.
+	//
+	// Use bloomFilterBitMask for accessing individual bits.
 	bits []uint64
+}
+
+// bloomFilterBitMask returns the mask for the bit j in a bloomFilter.bits word.
+func bloomFilterBitMask(j uint64) uint64 {
+	// Swapping the bytes of a word maps its bit j to the bit j^56.
+	return uint64(1) << ((j ^ bloomFilterBitIndexXor) & 63)
+}
+
+// bloomFilterBitIndexXor is 56 on little-endian architectures, where bloomFilter.bits words are stored with swapped bytes, and 0 otherwise.
+var bloomFilterBitIndexXor = func() uint64 {
+	if binary.NativeEndian.Uint16([]byte{1, 0}) == 1 {
+		return 56
+	}
+	return 0
+}()
+
+// bloomFilterWordsBytes returns bits as a byte slice.
+func bloomFilterWordsBytes(bits []uint64) []byte {
+	if len(bits) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&bits[0])), len(bits)*8)
 }
 
 func (bf *bloomFilter) reset() {
@@ -47,11 +73,7 @@ func (bf *bloomFilter) reset() {
 
 // marshal appends marshaled bf to dst and returns the result.
 func (bf *bloomFilter) marshal(dst []byte) []byte {
-	bits := bf.bits
-	for _, word := range bits {
-		dst = encoding.MarshalUint64(dst, word)
-	}
-	return dst
+	return append(dst, bloomFilterWordsBytes(bf.bits)...)
 }
 
 // unmarshal unmarshals bf from src.
@@ -59,13 +81,9 @@ func (bf *bloomFilter) unmarshal(src []byte) error {
 	if len(src)%8 != 0 {
 		return fmt.Errorf("cannot unmarshal bloomFilter from src with size not multiple by 8; len(src)=%d", len(src))
 	}
-	bf.reset()
-	wordsCount := len(src) / 8
-	bits := slicesutil.SetLength(bf.bits, wordsCount)
-	for i := range bits {
-		bits[i] = encoding.UnmarshalUint64(src)
-		src = src[8:]
-	}
+	// There is no need in clearing bf.bits, since they are overwritten below.
+	bits := slicesutil.SetLength(bf.bits[:0], len(src)/8)
+	copy(bloomFilterWordsBytes(bits), src)
 	bf.bits = bits
 	return nil
 }
@@ -108,11 +126,12 @@ func bloomFilterAddHashes(bits, hashes []uint64) {
 
 func initBloomFilter(bits, hashes []uint64) {
 	maxBits := uint64(len(bits)) * 64
+	bitIndexXor := bloomFilterBitIndexXor
 	for _, h := range hashes {
 		idx := h % maxBits
 		i := idx / 64
 		j := idx % 64
-		mask := uint64(1) << j
+		mask := uint64(1) << ((j ^ bitIndexXor) & 63)
 		w := bits[i]
 		if (w & mask) == 0 {
 			bits[i] = w | mask
@@ -180,7 +199,7 @@ func (bf *bloomFilter) containsAll(hashes []uint64) bool {
 		idx := h % maxBits
 		i := idx / 64
 		j := idx % 64
-		mask := uint64(1) << j
+		mask := bloomFilterBitMask(j)
 		w := bits[i]
 		if (w & mask) == 0 {
 			// The token is missing

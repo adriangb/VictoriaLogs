@@ -117,3 +117,28 @@ func TestBloomFilterMarshalTokens(t *testing.T) {
 	f([]string{"foo", "bar", "baz"}, "\x00\x00\x81\xA3\x48\x5C\x10\x26")
 	f([]string{"foo", "bar", "baz", "foo"}, "\x00\x00\x81\xA3\x48\x5C\x10\x26")
 }
+
+func TestBloomFilterBitsLayout(t *testing.T) {
+	// The bit idx must be stored at the bit idx%64 of the big-endian word idx/64 regardless of the architecture.
+	var bf bloomFilter
+	bf.bits = make([]uint64, 2)
+	initBloomFilter(bf.bits, []uint64{0, 9, 64 + 63})
+	data := bf.marshal(nil)
+	dataExpected := "\x00\x00\x00\x00\x00\x00\x02\x01\x80\x00\x00\x00\x00\x00\x00\x00"
+	if string(data) != dataExpected {
+		t.Fatalf("unexpected marshaled bloom filter\ngot\n%X\nwant\n%X", data, dataExpected)
+	}
+
+	var bf2 bloomFilter
+	if err := bf2.unmarshal([]byte(dataExpected)); err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	if !bf2.containsAll([]uint64{0, 9, 64 + 63}) {
+		t.Fatalf("containsAll must return true for the set bits")
+	}
+	for _, idx := range []uint64{1, 8, 56, 63, 64, 64 + 7, 64 + 56} {
+		if bf2.containsAll([]uint64{idx}) {
+			t.Fatalf("containsAll must return false for the unset bit %d", idx)
+		}
+	}
+}
