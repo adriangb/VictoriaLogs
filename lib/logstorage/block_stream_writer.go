@@ -384,6 +384,9 @@ func (bsw *blockStreamWriter) MustWriteBlockData(bd *blockData) {
 	if bd.rowsCount == 0 {
 		return
 	}
+	if bd.hasLegacyBloomFilters() {
+		logger.Panicf("BUG: cannot write block data with legacy bloom filters from part format v%d; it must be unpacked and re-encoded instead", bd.partFormatVersion)
+	}
 	bsw.mustWriteBlockInternal(&bd.streamID, nil, bd)
 }
 

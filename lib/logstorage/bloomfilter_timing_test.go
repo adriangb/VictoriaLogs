@@ -32,7 +32,7 @@ func BenchmarkBloomFilterContainsAll(b *testing.B) {
 				n := 0
 				for b.Loop() {
 					for _, data := range filters {
-						if err := bf.unmarshal(data); err != nil {
+						if err := bf.unmarshal(data, partFormatLatestVersion); err != nil {
 							b.Fatal(err)
 						}
 						if bf.containsAll(hashes) {

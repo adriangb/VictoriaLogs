@@ -8,7 +8,12 @@ const maxParallelReaders = 2_000
 // partFormatLatestVersion is the latest format version for parts.
 //
 // See partHeader.FormatVersion for details.
-const partFormatLatestVersion = 3
+const partFormatLatestVersion = partFormatSBBFVersion
+
+// partFormatSBBFVersion is the part format version starting from which bloom filters are stored as split block bloom filters.
+//
+// Older parts contain legacy bloom filters. See bloomFilter for details.
+const partFormatSBBFVersion = 4
 
 // bloomValuesMaxShardsCount is the number of shards for bloomFilename and valuesFilename files.
 //
