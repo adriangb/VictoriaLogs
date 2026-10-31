@@ -30,6 +30,11 @@ type blockData struct {
 
 	// constColumns contains data for const columns across the block
 	constColumns []Field
+
+	// partFormatVersion is the format version of the part bd has been read from.
+	//
+	// It is used for detecting blocks, which cannot be written to the output part as is.
+	partFormatVersion uint
 }
 
 // reset resets bd for subsequent reuse
@@ -50,6 +55,8 @@ func (bd *blockData) reset() {
 		ccs[i].Reset()
 	}
 	bd.constColumns = ccs[:0]
+
+	bd.partFormatVersion = 0
 }
 
 func (bd *blockData) resizeColumnsData(columnsDataLen int) []columnData {
@@ -76,6 +83,13 @@ func (bd *blockData) copyFrom(a *arena, src *blockData) {
 	bd.columnsData = cds
 
 	bd.constColumns = appendFields(a, bd.constColumns[:0], src.constColumns)
+
+	bd.partFormatVersion = src.partFormatVersion
+}
+
+// hasLegacyBloomFilters returns true if bd contains bloom filters, which cannot be written to the part with partFormatLatestVersion as is.
+func (bd *blockData) hasLegacyBloomFilters() bool {
+	return bd.partFormatVersion < partFormatSBBFVersion
 }
 
 // unmarshalRows appends unmarshaled from bd log entries to dst.
@@ -128,6 +142,7 @@ func (bd *blockData) mustReadFrom(a *arena, bh *blockHeader, sr *streamReaders) 
 	bd.streamID = bh.streamID
 	bd.uncompressedSizeBytes = bh.uncompressedSizeBytes
 	bd.rowsCount = bh.rowsCount
+	bd.partFormatVersion = sr.partFormatVersion
 
 	// Read timestamps
 	bd.timestampsData.mustReadFrom(a, &bh.timestampsHeader, sr)

@@ -464,7 +464,7 @@ func (bs *blockSearch) getBloomFilterForColumn(ch *columnHeader) *bloomFilter {
 	bs.qs.BytesReadBloomFilters += ch.bloomFilterSize
 
 	bf = getBloomFilter()
-	if err := bf.unmarshal(bb.B); err != nil {
+	if err := bf.unmarshal(bb.B, bs.partFormatVersion()); err != nil {
 		logger.Panicf("FATAL: %s: cannot unmarshal bloom filter: %s", bs.partPath(), err)
 	}
 	longTermBufPool.Put(bb)
