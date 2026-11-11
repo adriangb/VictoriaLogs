@@ -1,7 +1,7 @@
 package logstorage
 
 import (
-	"slices"
+	"math/bits"
 	"sync"
 
 	"github.com/cespare/xxhash/v2"
@@ -27,43 +27,66 @@ func tokenizeHashes(dst []uint64, a []string) []uint64 {
 	return dst
 }
 
-const hashTokenizerBucketsCount = 1024
+// hashTokenizerMinSlotsCount is the minimum number of slots in hashTokenizer hash set.
+const hashTokenizerMinSlotsCount = 1024
 
+// hashTokenizer deduplicates token hashes.
+//
+// It uses open addressing hash set with linear probing, which grows with the number of unique tokens,
+// so the cost of adding a token doesn't depend on the number of unique tokens.
 type hashTokenizer struct {
-	buckets [hashTokenizerBucketsCount]hashTokenizerBucket
-	bm      bitmap
-}
+	// slots contains the unique token hashes. Zero value marks an empty slot.
+	//
+	// The number of slots is always a power of two.
+	slots []uint64
 
-type hashTokenizerBucket struct {
-	v        uint64
-	overflow []uint64
-}
+	// itemsCount is the number of non-zero hashes in slots.
+	itemsCount int
 
-func (b *hashTokenizerBucket) reset() {
-	// do not spend CPU time on clearing v and b.overflow items,
-	// since they'll be overwritten with new items.
-	b.overflow = b.overflow[:0]
+	// hasZeroHash is set to true if zero hash has been added.
+	hasZeroHash bool
+
+	// used holds the indexes of the occupied slots while there are few of them,
+	// so reset can clear only these slots instead of the whole slots array.
+	// It is nil after it overflows or after grow, and then reset clears all the slots.
+	used []uint32
+
+	// usedOverflow is set when used no longer lists all the occupied slots.
+	usedOverflow bool
 }
 
 func newHashTokenizer() *hashTokenizer {
-	var t hashTokenizer
-	t.bm.init(len(t.buckets))
-	return &t
+	return &hashTokenizer{
+		slots: make([]uint64, hashTokenizerMinSlotsCount),
+	}
 }
 
 func (t *hashTokenizer) reset() {
-	if t.bm.onesCount() <= len(t.buckets)/4 {
-		t.bm.forEachSetBit(func(idx int) bool {
-			t.buckets[idx].reset()
-			return false
-		})
+	// Release the memory occupied by too big slots, which may be left after processing values with many unique tokens.
+	slotsCount := getHashTokenizerSlotsCount(t.itemsCount)
+	if len(t.slots) > 4*slotsCount {
+		t.slots = make([]uint64, slotsCount)
+	} else if t.usedOverflow {
+		clear(t.slots)
 	} else {
-		buckets := t.buckets[:]
-		for i := range buckets {
-			buckets[i].reset()
+		slots := t.slots
+		for _, i := range t.used {
+			slots[i] = 0
 		}
-		t.bm.init(len(t.buckets))
 	}
+	t.used = t.used[:0]
+	t.usedOverflow = false
+	t.itemsCount = 0
+	t.hasZeroHash = false
+}
+
+// getHashTokenizerSlotsCount returns the number of slots needed for holding itemsCount hashes.
+func getHashTokenizerSlotsCount(itemsCount int) int {
+	n := 2 * itemsCount
+	if n <= hashTokenizerMinSlotsCount {
+		return hashTokenizerMinSlotsCount
+	}
+	return 1 << bits.Len(uint(n-1))
 }
 
 func (t *hashTokenizer) tokenizeString(dst []uint64, s string) []uint64 {
@@ -145,23 +168,64 @@ func (t *hashTokenizer) tokenizeStringUnicode(dst []uint64, s string) []uint64 {
 
 func (t *hashTokenizer) addToken(token string) (uint64, bool) {
 	h := xxhash.Sum64(bytesutil.ToUnsafeBytes(token))
-	idx := int(h % uint64(len(t.buckets)))
+	return h, t.addHash(h)
+}
 
-	b := &t.buckets[idx]
-	if !t.bm.isSetBit(idx) {
-		b.v = h
-		t.bm.setBit(idx)
-		return h, true
+// addHash adds h to t and returns true if h hasn't been added before.
+func (t *hashTokenizer) addHash(h uint64) bool {
+	if h == 0 {
+		if t.hasZeroHash {
+			return false
+		}
+		t.hasZeroHash = true
+		return true
 	}
 
-	if b.v == h {
-		return h, false
+	slots := t.slots
+	mask := uint64(len(slots) - 1)
+	i := h & mask
+	for {
+		v := slots[i]
+		if v == h {
+			return false
+		}
+		if v == 0 {
+			break
+		}
+		i = (i + 1) & mask
 	}
-	if slices.Contains(b.overflow, h) {
-		return h, false
+
+	slots[i] = h
+	if !t.usedOverflow {
+		if len(t.used) < len(slots)/16 {
+			t.used = append(t.used, uint32(i))
+		} else {
+			t.usedOverflow = true
+		}
 	}
-	b.overflow = append(b.overflow, h)
-	return h, true
+	t.itemsCount++
+	if 2*t.itemsCount > len(slots) {
+		t.grow()
+	}
+	return true
+}
+
+func (t *hashTokenizer) grow() {
+	slotsOld := t.slots
+	slots := make([]uint64, 2*len(slotsOld))
+	mask := uint64(len(slots) - 1)
+	for _, h := range slotsOld {
+		if h == 0 {
+			continue
+		}
+		i := h & mask
+		for slots[i] != 0 {
+			i = (i + 1) & mask
+		}
+		slots[i] = h
+	}
+	t.slots = slots
+	t.usedOverflow = true
 }
 
 func getHashTokenizer() *hashTokenizer {
