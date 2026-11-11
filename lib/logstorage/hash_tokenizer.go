@@ -45,6 +45,14 @@ type hashTokenizer struct {
 
 	// hasZeroHash is set to true if zero hash has been added.
 	hasZeroHash bool
+
+	// used holds the indexes of the occupied slots while there are few of them,
+	// so reset can clear only these slots instead of the whole slots array.
+	// It is nil after it overflows or after grow, and then reset clears all the slots.
+	used []uint32
+
+	// usedOverflow is set when used no longer lists all the occupied slots.
+	usedOverflow bool
 }
 
 func newHashTokenizer() *hashTokenizer {
@@ -58,9 +66,16 @@ func (t *hashTokenizer) reset() {
 	slotsCount := getHashTokenizerSlotsCount(t.itemsCount)
 	if len(t.slots) > 4*slotsCount {
 		t.slots = make([]uint64, slotsCount)
-	} else {
+	} else if t.usedOverflow {
 		clear(t.slots)
+	} else {
+		slots := t.slots
+		for _, i := range t.used {
+			slots[i] = 0
+		}
 	}
+	t.used = t.used[:0]
+	t.usedOverflow = false
 	t.itemsCount = 0
 	t.hasZeroHash = false
 }
@@ -181,6 +196,13 @@ func (t *hashTokenizer) addHash(h uint64) bool {
 	}
 
 	slots[i] = h
+	if !t.usedOverflow {
+		if len(t.used) < len(slots)/16 {
+			t.used = append(t.used, uint32(i))
+		} else {
+			t.usedOverflow = true
+		}
+	}
 	t.itemsCount++
 	if 2*t.itemsCount > len(slots) {
 		t.grow()
@@ -203,6 +225,7 @@ func (t *hashTokenizer) grow() {
 		slots[i] = h
 	}
 	t.slots = slots
+	t.usedOverflow = true
 }
 
 func getHashTokenizer() *hashTokenizer {
