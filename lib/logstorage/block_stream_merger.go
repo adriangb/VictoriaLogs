@@ -265,6 +265,12 @@ func (bsm *blockStreamMerger) mustWriteBlockData(bd *blockData) {
 		return
 	}
 
+	if bd.hasLegacyBloomFilters() {
+		// Slow path - unpack bd in order to re-create bloom filters in the latest format.
+		bsm.mustMergeRows(bd)
+		return
+	}
+
 	if bd.uncompressedSizeBytes >= maxUncompressedBlockSize {
 		// Fast path - write full bd to the output without extracting log entries from it.
 		bsm.bsw.MustWriteBlockData(bd)
